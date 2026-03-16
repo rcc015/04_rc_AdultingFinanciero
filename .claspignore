@@ -1,0 +1,7 @@
+.git/**
+.gitignore
+.clasp.json
+.clasp.json.example
+node_modules/**
+README.md
+**/*.md
