@@ -65,6 +65,47 @@ Desde Apps Script:
 3. Ejecutar como `Me`
 4. Acceso según necesites
 
+## Flujo de trabajo estable
+
+Cada cambio importante debe cerrar con este flujo:
+
+```bash
+git status
+git add .
+git commit -m "mensaje claro del cambio"
+git push
+clasp push
+```
+
+Notas:
+
+- `git push` respalda el código en GitHub.
+- `clasp push` sincroniza el proyecto de Apps Script.
+- Si el cambio debe verse en producción, además actualiza la implementación web desde Apps Script.
+
+## Respaldo recomendado
+
+### Código
+
+- Haz commits pequeños y con mensajes claros.
+- Empuja a GitHub después de cada cambio importante.
+- Mantén `clasp push` como paso fijo después de cada `git push`.
+
+### Datos
+
+- Duplica o exporta periódicamente el Google Sheet que usa la app.
+- Respaldo mínimo recomendado: antes de cambios grandes y al cierre de cada semana.
+- Formato recomendado de exportación: Excel (`.xlsx`) o copia completa del Sheet en Drive.
+
+### Metadata privada
+
+- Guarda `Deployment URL`, `Script ID` y `Spreadsheet ID` en un archivo local no versionado.
+- Usa la plantilla `PRIVATE_OPERATIONS.md.example` para crear tu copia local:
+
+```bash
+cp PRIVATE_OPERATIONS.md.example PRIVATE_OPERATIONS.md
+```
+
 ## Scopes usados
 
 Este proyecto usa servicios de:
