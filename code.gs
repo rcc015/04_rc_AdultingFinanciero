@@ -366,68 +366,40 @@ function parsearCorreosBBVA() {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(SHEET_NAME);
-
-  // Buscar correos de BBVA no marcados como procesados
-  const threads = GmailApp.search('from:clientes@bbva.mx -label:bbva-procesado', 0, 50);
-
-  if (threads.length === 0) return { ok: true, count: 0 };
-
-  // Crear label "bbva-procesado" si no existe
-  let label = GmailApp.getUserLabelByName('bbva-procesado');
-  if (!label) label = GmailApp.createLabel('bbva-procesado');
-
-  let count = 0;
   const ts = new Date();
 
-  threads.forEach(thread => {
-    const messages = thread.getMessages();
-    messages.forEach(msg => {
+  const bbvaCount = _procesarCorreosBanco_({
+    query: 'from:clientes@bbva.mx -label:bbva-procesado -subject:apartado -"retiraste dinero" -"realizaste un apartado"',
+    labelName: 'bbva-procesado',
+    email: email,
+    sh: sh,
+    ts: ts,
+    parser: function(msg) {
       const asunto = msg.getSubject() || "";
       const body = msg.getBody() || "";
       const fechaMsg = msg.getDate();
 
-      let movimiento = null;
-
-      // --- TIPO 1: Transferencia exitosa ---
       if (asunto.toLowerCase().includes("transferencia") &&
           asunto.toLowerCase().includes("exitosa")) {
-        movimiento = _parsearTransferencia(body, fechaMsg);
+        return _parsearTransferencia(body, fechaMsg);
       }
 
-      // --- TIPO 2: Retiro de apartado ---
-      else if (asunto.toLowerCase().includes("retiraste dinero") ||
-               asunto.toLowerCase().includes("apartado")) {
-        movimiento = _parsearApartado(body, fechaMsg, "retiro");
-      }
-
-      // --- TIPO 3: Creación de apartado ---
-      else if (asunto.toLowerCase().includes("realizaste un apartado")) {
-        movimiento = _parsearApartado(body, fechaMsg, "creacion");
-      }
-
-      // Registrar si se parseó correctamente y no es duplicado
-      if (movimiento && !_esDuplicado(sh, movimiento)) {
-        const mes = movimiento.fecha.slice(0, 7);
-        sh.appendRow([
-          movimiento.fecha,
-          movimiento.tipo,
-          movimiento.categoria,
-          movimiento.monto,
-          movimiento.descripcion,
-          email,
-          ts,
-          "'" + mes,
-          "BBVA_AUTO"  // Columna 9: marcador de origen
-        ]);
-        count++;
-      }
-    });
-
-    // Marcar thread como procesado
-    thread.addLabel(label);
+      return null;
+    }
   });
 
-  return { ok: true, count: count };
+  const heyBancoCount = _procesarCorreosBanco_({
+    query: '((from:alertas@heybanco.com OR from:notificaciones@heybanco.com) ("Tu compra fue realizada con éxito" OR "Tu compra fue realizada con exito" OR "Se realizó una compra" OR "Se realizo una compra" OR "Compra aprobada" OR "Uso de tu tarjeta Hey")) -label:heybanco-procesado',
+    labelName: 'heybanco-procesado',
+    email: email,
+    sh: sh,
+    ts: ts,
+    parser: function(msg) {
+      return _parsearHeyBancoCompra_(msg);
+    }
+  });
+
+  return { ok: true, count: bbvaCount + heyBancoCount };
 }
 
 /**
@@ -461,37 +433,58 @@ function _parsearTransferencia(body, fechaMsg) {
   }
 }
 
-/**
- * Parsea un correo de apartado BBVA
- */
-function _parsearApartado(body, fechaMsg, accion) {
+function _parsearHeyBancoCompra_(msg) {
   try {
-    const montoMatch = body.match(/\$\s*([\d,]+\.?\d*)/);
-    if (!montoMatch) return null;
-    const monto = parseFloat(montoMatch[1].replace(/,/g, ''));
+    const from = String(msg.getFrom ? (msg.getFrom() || "") : "");
+    const asunto = String(msg.getSubject ? (msg.getSubject() || "") : "");
+    const plainBody = String(msg.getPlainBody ? (msg.getPlainBody() || "") : "");
+    const htmlBody = String(msg.getBody ? (msg.getBody() || "") : "");
+    const text = _htmlToText_(htmlBody);
+    const base = [from, asunto, plainBody, text].join("\n").replace(/\u00a0/g, " ");
+    const lower = base.toLowerCase();
+
+    const esCorreoHey = /(heybanco|hey,\s*banco|servicio de alertas heybanco|cr[eé]dito hey|uso de tu tarjeta hey)/i.test(lower);
+    const esCorreoDeCompra = /(tu compra fue realizada con [ée]xito|se realiz[oó] una compra|compra aprobada|uso de tu tarjeta hey)/i.test(lower);
+
+    if (!esCorreoHey || !esCorreoDeCompra) {
+      return null;
+    }
+
+    const monto =
+      _extractMoneyFromPatterns_(base, [
+        /compra\s*(?:por|de)?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+        /cantidad\s*:\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+        /importe\s*:\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+        /monto\s*:\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+        /total\s*:\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i
+      ]) || _extractMoney_(base);
     if (!monto || monto <= 0) return null;
 
-    const fecha = Utilities.formatDate(fechaMsg, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    const comercio =
+      _extractFirstMatch_(base, [
+        /comercio\s*:\s*([^\n\r]+)/i,
+        /(?:comercio|establecimiento|negocio)\s*[:\-]\s*([^\n\r]+)/i,
+        /merchant\s*[:\-]\s*([^\n\r]+)/i,
+        /descripci[oó]n\s*[:\-]\s*([^\n\r]+)/i,
+        /(?:compra|consumo)\s+(?:en|realizada en)\s+([^\n\r]+?)(?:\s{2,}|\.|$)/i,
+        /se realiz[oó] una compra\s+en\s+([^\n\r]+?)(?:\s+por\s+\$|\s+de\s+\$|\.|$)/i,
+        /en\s+([A-Z0-9&.,'\/\-\s]{3,})(?:\s+por\s+\$|\s+monto|\s+importe|\.|$)/i
+      ]) || "Compra Hey Banco";
 
-    if (accion === "retiro") {
-      return {
-        fecha: fecha,
-        tipo: "Ingreso",
-        categoria: "BBVA Apartado",
-        monto: monto,
-        descripcion: "Retiro de apartado BBVA"
-      };
-    } else {
-      return {
-        fecha: fecha,
-        tipo: "Gasto",
-        categoria: "BBVA Apartado",
-        monto: monto,
-        descripcion: "Creación de apartado BBVA"
-      };
-    }
+    const fecha = Utilities.formatDate(msg.getDate(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+    const emailAsignado = _resolveHeyBancoEmail_(base);
+
+    return {
+      fecha: fecha,
+      tipo: "Gasto",
+      categoria: "Hey Banco Compra",
+      monto: monto,
+      descripcion: _cleanDescription_(comercio),
+      origen: "HEYBANCO_AUTO",
+      emailAsignado: emailAsignado
+    };
   } catch(e) {
-    Logger.log("Error parseando apartado: " + e);
+    Logger.log("Error parseando compra Hey Banco: " + e);
     return null;
   }
 }
@@ -502,13 +495,114 @@ function _parsearApartado(body, fechaMsg, accion) {
  */
 function _esDuplicado(sh, mov) {
   if (!sh || sh.getLastRow() < 2) return false;
-  const data = sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues();
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, 9).getValues();
   return data.some(r => {
     const fecha = Utilities.formatDate(new Date(r[0]), Session.getScriptTimeZone(), "yyyy-MM-dd");
+    const categoria = String(r[2] || "");
+    const descripcion = String(r[4] || "").trim();
+    const origen = String(r[8] || "");
     return fecha === mov.fecha &&
-           String(r[2]).includes("BBVA") &&
-           Number(r[3]) === mov.monto;
+           categoria === mov.categoria &&
+           Number(r[3]) === mov.monto &&
+           (!mov.descripcion || descripcion === String(mov.descripcion).trim()) &&
+           (!mov.origen || origen === mov.origen || !origen);
   });
+}
+
+function _procesarCorreosBanco_(opts) {
+  const threads = GmailApp.search(opts.query, 0, 50);
+  if (threads.length === 0) return 0;
+
+  let label = GmailApp.getUserLabelByName(opts.labelName);
+  if (!label) label = GmailApp.createLabel(opts.labelName);
+
+  let count = 0;
+
+  threads.forEach(thread => {
+    thread.getMessages().forEach(msg => {
+      const movimiento = opts.parser(msg);
+      if (movimiento && !_esDuplicado(opts.sh, movimiento)) {
+        const mes = movimiento.fecha.slice(0, 7);
+        opts.sh.appendRow([
+          movimiento.fecha,
+          movimiento.tipo,
+          movimiento.categoria,
+          movimiento.monto,
+          movimiento.descripcion,
+          movimiento.emailAsignado || opts.email,
+          opts.ts,
+          "'" + mes,
+          movimiento.origen || ""
+        ]);
+        count++;
+      }
+    });
+
+    thread.addLabel(label);
+  });
+
+  return count;
+}
+
+function _extractMoney_(text) {
+  const patterns = [
+    /(?:importe|monto|total)\s*[:\-]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /por\s+\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /\$\s*([\d,]+(?:\.\d{1,2})?)/
+  ];
+
+  return _extractMoneyFromPatterns_(text, patterns);
+}
+
+function _extractMoneyFromPatterns_(text, patterns) {
+  for (let i = 0; i < patterns.length; i++) {
+    const match = String(text || "").match(patterns[i]);
+    if (match) {
+      const value = parseFloat(String(match[1]).replace(/,/g, ""));
+      if (value > 0) return value;
+    }
+  }
+
+  return 0;
+}
+
+function _extractFirstMatch_(text, patterns) {
+  for (let i = 0; i < patterns.length; i++) {
+    const match = String(text || "").match(patterns[i]);
+    if (match && match[1]) return match[1].trim();
+  }
+  return "";
+}
+
+function _cleanDescription_(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .replace(/^(en|en\s+el)\s+/i, "")
+    .replace(/\s*(?:monto|importe|fecha|tarjeta)\b.*$/i, "")
+    .replace(/\s*(?:autorizaci[oó]n|folio|referencia)\b.*$/i, "")
+    .trim();
+}
+
+function _resolveHeyBancoEmail_(text) {
+  const normalized = String(text || "").toLowerCase();
+
+  if (/cr[eé]dito hey/.test(normalized) && /terminaci[oó]n\s*\*+\s*9780/.test(normalized)) {
+    return "afibn3255@gmail.com";
+  }
+
+  return "";
+}
+
+function _htmlToText_(html) {
+  return String(html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n\s+/g, "\n")
+    .trim();
 }
 
 /***** BBVA: OBTENER MOVIMIENTOS PARA DASHBOARD *****/
@@ -533,7 +627,8 @@ function uiGetBBVAMovements(ym) {
     const r = data[i];
     const cat = String(r[2] || "");
     const origen = String(r[8] || "");
-    const esBBVA = cat.includes("BBVA") || origen === "BBVA_AUTO";
+    const esApartado = cat === "BBVA Apartado";
+    const esBBVA = !esApartado && (cat === "BBVA Transferencia" || origen === "BBVA_AUTO");
 
     if (!esBBVA) continue;
 
@@ -607,41 +702,39 @@ function importarBBVAHistorico() {
   const email = getUserEmail_();
   if (!isAllowed_(email)) throw new Error("Acceso denegado");
 
-  // Buscar TODOS los correos BBVA (con o sin label procesado)
-  const threads = GmailApp.search('from:clientes@bbva.mx', 0, 200);
-  let label = GmailApp.getUserLabelByName('bbva-procesado');
-  if (!label) label = GmailApp.createLabel('bbva-procesado');
-
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(SHEET_NAME);
   const ts = new Date();
-  let count = 0;
-  const email_ = email;
 
-  threads.forEach(thread => {
-    thread.getMessages().forEach(msg => {
+  const bbvaCount = _procesarCorreosBanco_({
+    query: 'from:clientes@bbva.mx -subject:apartado -"retiraste dinero" -"realizaste un apartado"',
+    labelName: 'bbva-procesado',
+    email: email,
+    sh: sh,
+    ts: ts,
+    parser: function(msg) {
       const asunto = msg.getSubject() || "";
       const body = msg.getBody() || "";
       const fechaMsg = msg.getDate();
 
-      let movimiento = null;
-
       if (asunto.toLowerCase().includes("transferencia") && asunto.toLowerCase().includes("exitosa")) {
-        movimiento = _parsearTransferencia(body, fechaMsg);
-      } else if (asunto.toLowerCase().includes("retiraste dinero") || asunto.toLowerCase().includes("apartado")) {
-        movimiento = _parsearApartado(body, fechaMsg, "retiro");
-      } else if (asunto.toLowerCase().includes("realizaste un apartado")) {
-        movimiento = _parsearApartado(body, fechaMsg, "creacion");
+        return _parsearTransferencia(body, fechaMsg);
       }
-
-      if (movimiento && !_esDuplicado(sh, movimiento)) {
-        const mes = movimiento.fecha.slice(0, 7);
-        sh.appendRow([movimiento.fecha, movimiento.tipo, movimiento.categoria, movimiento.monto, movimiento.descripcion, email_, ts, "'" + mes, "BBVA_AUTO"]);
-        count++;
-      }
-    });
-    thread.addLabel(label);
+      return null;
+    }
   });
 
-  return { ok: true, count: count, msg: count + " movimientos BBVA importados" };
+  const heyBancoCount = _procesarCorreosBanco_({
+    query: '((from:alertas@heybanco.com OR from:notificaciones@heybanco.com) ("Tu compra fue realizada con éxito" OR "Tu compra fue realizada con exito" OR "Se realizó una compra" OR "Se realizo una compra" OR "Compra aprobada" OR "Uso de tu tarjeta Hey"))',
+    labelName: 'heybanco-procesado',
+    email: email,
+    sh: sh,
+    ts: ts,
+    parser: function(msg) {
+      return _parsearHeyBancoCompra_(msg);
+    }
+  });
+
+  const total = bbvaCount + heyBancoCount;
+  return { ok: true, count: total, msg: total + " movimientos bancarios importados" };
 }

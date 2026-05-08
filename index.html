@@ -267,21 +267,24 @@
         <div id="movList" style="padding-bottom:160px;">Cargando...</div>
       </div>
 
-      <!-- ======================== VISTA: BBVA ======================== -->
+      <!-- ======================== VISTA: BANCOS ======================== -->
       <div id="view-bbva" class="view">
 
-        <!-- Hero card azul BBVA -->
+        <!-- Hero card bancos -->
         <div class="bbva-hero" style="margin-top:10px;">
-          <div class="bbva-hero-title">🏦 BBVA Este Mes</div>
+          <div class="bbva-hero-title">🏦 Bancos Este Mes</div>
           <div class="bbva-hero-row">
             <div>
               <div id="bbvaTotalGastos" class="bbva-hero-val">$0</div>
               <div class="bbva-sub">transferido</div>
             </div>
-            <button class="bbva-sync-btn" onclick="sincronizarBBVA()" id="btnSyncBBVA">🔄 Sincronizar</button>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+              <button class="bbva-sync-btn" onclick="sincronizarBBVA()" id="btnSyncBBVA">🔄 Sincronizar Bancos</button>
+              <button class="bbva-sync-btn" onclick="importarBBVAHistoricoUI()" id="btnImportBBVAHistorico">📥 Importar Histórico</button>
+            </div>
           </div>
           <div style="display:flex; gap:40px;">
-            <div><div style="font-size:14px; opacity:0.7; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Apartados</div><div id="bbvaTotalIngresos" style="font-size:28px; font-weight:900;">$0</div></div>
+            <div><div style="font-size:14px; opacity:0.7; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Ingresos</div><div id="bbvaTotalIngresos" style="font-size:28px; font-weight:900;">$0</div></div>
             <div><div style="font-size:14px; opacity:0.7; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Movimientos</div><div id="bbvaTotalCount" style="font-size:28px; font-weight:900;">0</div></div>
           </div>
         </div>
@@ -290,12 +293,12 @@
         <div class="card" style="margin-bottom:32px;">
           <h3 style="margin:0 0 28px; font-size:30px; font-weight:900; color:var(--text-main);">Por Beneficiario</h3>
           <div id="bbvaBeneficiarios">
-            <div style="text-align:center; padding:40px; opacity:0.4; font-size:22px;">Toca Sincronizar para cargar</div>
+            <div style="text-align:center; padding:40px; opacity:0.4; font-size:22px;">Toca Sincronizar Bancos para cargar</div>
           </div>
         </div>
 
-        <!-- Historial BBVA -->
-        <div class="section-title">Movimientos BBVA</div>
+        <!-- Historial bancos -->
+        <div class="section-title">Movimientos Bancarios</div>
         <div id="bbvaMovList" style="padding-bottom:180px;">
           <div style="text-align:center; padding:60px; opacity:0.4; font-size:22px;">Sin datos aún</div>
         </div>
@@ -328,7 +331,7 @@
     <nav class="navbar">
       <button class="nav-btn active" onclick="go('reg', this)"><span class="nav-icon">➕</span><span class="nav-lbl">Registro</span></button>
       <button class="nav-btn" onclick="go('list', this)"><span class="nav-icon">🧾</span><span class="nav-lbl">Gastos</span></button>
-      <button class="nav-btn" onclick="go('bbva', this)"><span class="nav-icon">🏦</span><span class="nav-lbl">BBVA</span></button>
+      <button class="nav-btn" onclick="go('bbva', this)"><span class="nav-icon">🏦</span><span class="nav-lbl">Bancos</span></button>
       <button class="nav-btn" onclick="go('buds', this)"><span class="nav-icon">🎯</span><span class="nav-lbl">Metas</span></button>
     </nav>
 
@@ -747,7 +750,7 @@
         // Lista de movimientos
         const listEl = document.getElementById('bbvaMovList');
         if(items.length === 0) {
-          listEl.innerHTML = `<div style="text-align:center;padding:60px;opacity:0.4;font-size:24px;">Sin movimientos BBVA este mes</div>`;
+          listEl.innerHTML = `<div style="text-align:center;padding:60px;opacity:0.4;font-size:24px;">Sin movimientos bancarios este mes</div>`;
           return;
         }
 
@@ -775,18 +778,21 @@
         }).join('');
       }
 
-      // Botón Sincronizar: jala correos BBVA nuevos y refresca
+      // Botón Sincronizar: jala correos bancarios nuevos y refresca
       window.sincronizarBBVA = function() {
         vibrate();
         const btn = document.getElementById('btnSyncBBVA');
+        const btnHistorico = document.getElementById('btnImportBBVAHistorico');
         btn.innerText = '⏳ Sincronizando...';
         btn.disabled = true;
+        if (btnHistorico) btnHistorico.disabled = true;
         google.script.run
           .withSuccessHandler(res => {
-            btn.innerText = '🔄 Sincronizar';
+            btn.innerText = '🔄 Sincronizar Bancos';
             btn.disabled = false;
+            if (btnHistorico) btnHistorico.disabled = false;
             if(res.count > 0) {
-              showToast(`✅ ${res.count} movimiento(s) BBVA importado(s)`);
+              showToast(`✅ ${res.count} movimiento(s) bancario(s) importado(s)`);
               loadBBVA();
               loadDash();
             } else {
@@ -794,11 +800,41 @@
             }
           })
           .withFailureHandler(err => {
-            btn.innerText = '🔄 Sincronizar';
+            btn.innerText = '🔄 Sincronizar Bancos';
             btn.disabled = false;
+            if (btnHistorico) btnHistorico.disabled = false;
             showToast('❌ Error al sincronizar');
           })
           .parsearCorreosBBVA();
+      }
+
+      window.importarBBVAHistoricoUI = function() {
+        vibrate();
+        const btn = document.getElementById('btnImportBBVAHistorico');
+        const btnSync = document.getElementById('btnSyncBBVA');
+        btn.innerText = '⏳ Importando...';
+        btn.disabled = true;
+        if (btnSync) btnSync.disabled = true;
+        google.script.run
+          .withSuccessHandler(res => {
+            btn.innerText = '📥 Importar Histórico';
+            btn.disabled = false;
+            if (btnSync) btnSync.disabled = false;
+            if(res.count > 0) {
+              showToast(`✅ ${res.count} movimiento(s) históricos importado(s)`);
+              loadBBVA();
+              loadDash();
+            } else {
+              showToast('✅ Sin movimientos históricos por importar');
+            }
+          })
+          .withFailureHandler(err => {
+            btn.innerText = '📥 Importar Histórico';
+            btn.disabled = false;
+            if (btnSync) btnSync.disabled = false;
+            showToast('❌ Error al importar histórico');
+          })
+          .importarBBVAHistorico();
       }
 
     </script>
